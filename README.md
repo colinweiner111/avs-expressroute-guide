@@ -1,18 +1,6 @@
----
-title: Azure VMware Solution (AVS) – ExpressRoute, Identity & HCX Setup Checklist (Gen 1)
-author: Microsoft Cloud Solution Architect
-environment: Azure VMware Solution (Gen 1)
-last_updated: 2025-10-20
----
 
 # 🧩 Azure VMware Solution (AVS) – ExpressRoute, Identity & HCX Setup Checklist (v6)
 
-**Environment:** Azure VMware Solution (Gen 1)  
-**Scenario:** Post-deployment configuration for a new AVS Gen 1 private cloud  
-**Focus:** Portal-first workflow for configuring ExpressRoute Connectivity to On-Premises, Identity (AD/LDAP), and VMware HCX  
-**Docs validated:** October 2025  
-
----
 
 ## 🌐 1. ExpressRoute Connectivity to On-Premises
 
