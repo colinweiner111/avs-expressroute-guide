@@ -1,6 +1,4 @@
-
-# 🧩 Azure VMware Solution (AVS) – ExpressRoute, Identity & HCX Setup Checklist (v6)
-
+# 🧩 Azure VMware Solution (AVS) – ExpressRoute, Identity & HCX Setup Checklist (v7.2)
 
 ## 🌐 1. ExpressRoute Connectivity to On-Premises
 
@@ -30,10 +28,10 @@
 
 ### **Validation Tips**
 - Verify **ExpressRoute connection status** shows *Connected* in both AVS and ExpressRoute circuit blades.  
-- Confirm that **Global Reach** connectivity is enabled and active.  
-- From a jump box or on-prem VM, run `tracert` or `Test-NetConnection` to confirm reachability to AVS vCenter and NSX Manager FQDNs.  
-- Review **Effective Routes** on your Azure VM NIC to ensure AVS subnets are advertised through ExpressRoute. 
-- Ensure both AVS private clouds (old and new) show Connected status under Connectivity → ExpressRoute before proceeding with HCX Interconnect. (This helps confirm readiness for       migration.) 
+- Confirm that **Global Reach** connectivity is enabled and active (if used).  
+- From a jump box or on-prem VM, run `tracert` / `Test-NetConnection` to confirm reachability to AVS vCenter and NSX Manager FQDNs.  
+- Review **Effective Routes** on your Azure VM NIC to ensure AVS subnets are advertised through ExpressRoute.  
+- Ensure both AVS private clouds (old and new) show Connected status under **Connectivity → ExpressRoute** before proceeding with HCX.
 
 ---
 
@@ -49,7 +47,7 @@
 - [ ] Add Identity Source using Run Command → AddIdentitySource
 - [ ] Verify identity source in vCenter
 - [ ] Assign roles to AD groups or users (CloudAdmin / custom roles)
-- [ ] Test login with `domain\\user` credentials
+- [ ] Test login with `domain\user` credentials
 
 ### **Detailed Steps**
 
@@ -57,10 +55,10 @@
 |------|--------|-----------|----------------|------------|
 | **2.1** | **Validate DNS resolution** between AVS and your AD domain | **Azure Portal** | Configure DNS forwarders so vCenter can resolve DCs | [Configure DNS forwarder for AVS (Gen 1)](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-dns-azure-vmware-solution) |
 | **2.2** | **Export LDAPS certificate** from a domain controller and upload to Azure Blob Storage | **Azure Portal / Storage Account** | Generate a SAS URL for the certificate | [Step 2 – Export certificate](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-2-export-the-domain-controller-certificate) |
-| **2.3** | **Add Identity Source** using *Run Command → AddIdentitySource* | **Azure Portal → AVS → Run Command** | Fill in DomainName, BaseDN, PrimaryURL, SAS URL, Username, and Password | [Step 3 – AddIdentitySource](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-3-run-the-addidentitysource-command) |
+| **2.3** | **Add Identity Source** using *Run Command → AddIdentitySource* | **Azure Portal → AVS → Run Command** | Provide DomainName, BaseDN, PrimaryURL (ldaps://), SAS URL, Username, and Password | [Step 3 – AddIdentitySource](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-3-run-the-addidentitysource-command) |
 | **2.4** | **Verify identity source in vCenter** | **vCenter UI** | *Administration → SSO → Configuration → Identity Sources* | [Step 4 – Verify](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-4-verify-the-identity-source) |
-| **2.5** | **Assign roles** to AD groups or users | **vCenter UI** | Use least privilege and governance best practices | [AVS Identity Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-identity) |
-| **2.6** | **Test login** with `domain\\user` credentials | **vCenter UI** | Validate successful AD authentication | — |
+| **2.5** | **Assign roles** to AD groups or users** | **vCenter UI** | Use least privilege and governance best practices | [AVS Identity Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-identity) |
+| **2.6** | **Test login** with `domain\user` credentials | **vCenter UI** | Validate successful AD authentication | — |
 
 ---
 
@@ -72,19 +70,18 @@
 > 🧱 _This section applies to AVS Gen 1. For Gen 2, see the new HCX and networking integration model that uses native connectivity._
 
 ### **Task Checklist**
-- [ ] Enable HCX Cloud Manager
-- [ ] Copy HCX license key and cloud URL
-- [ ] Deploy HCX Connector OVA in on-premises vCenter
-- [ ] Activate HCX Connector with license key
-- [ ] Pair on-prem Connector with AVS HCX Cloud Manager
-- [ ] Create Network Profiles & Compute Profiles
-- [ ] Build Service Mesh between AVS and on-prem
-- [ ] (Optional) Extend L2 Networks to AVS
+- [ ] Enable HCX Cloud Manager  
+- [ ] Copy HCX license key and cloud URL  
+- [ ] Deploy HCX Connector OVA in source SDDC vCenter  
+- [ ] Activate HCX Connector with license key  
+- [ ] Create AVS Interconnect between both SDDCs (if same region)  
+- [ ] Pair source Connector with destination HCX Cloud Manager  
+- [ ] Create Network Profiles & Compute Profiles  
+- [ ] Build Service Mesh between both SDDCs  
+- [ ] (Optional) Extend L2 Networks  
 - [ ] Validate migration (Cold, vMotion, Bulk)
-- [ ] (Optional) Migrate between AVS private clouds using Interconnect
 
-> 💡 **Tip:** Typically, this is used for migrations between AVS private clouds (A→B) after both are linked to the same on-prem ExpressRoute circuit via Global Reach.
-
+> 💡 **Tip:** For same-region migrations, **AVS Interconnect** replaces the need for ExpressRoute Global Reach and should be configured **before** HCX pairing.
 
 ### **Detailed Steps**
 
@@ -92,14 +89,15 @@
 |------|--------|-----------|----------------|------------|
 | **3.1** | **Enable HCX Cloud Manager** | **Azure Portal → Manage → Add-ons → HCX → Enable** | Deployment takes ~30 min | [Install HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/install-vmware-hcx) |
 | **3.2** | **Copy HCX license key and cloud URL** | **Azure Portal → Manage → Add-ons → HCX** | Needed for HCX Connector activation | same doc |
-| **3.3** | **Deploy HCX Connector OVA** | **vSphere UI (on-prem)** | Configure management and service networks | [Configure HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) |
+| **3.3** | **Deploy HCX Connector OVA** | **vSphere UI (source SDDC)** | Configure management and service networks | [Configure HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) |
 | **3.4** | **Activate HCX Connector** | **HCX UI** | Validate SSO and network connectivity | same doc |
-| **3.5** | **Pair sites** – On-prem Connector → AVS HCX Cloud Manager | **HCX UI** | Authenticate with `cloudadmin@vsphere.local` credentials | same doc |
-| **3.6** | **Create Network Profiles & Compute Profiles** | **HCX UI** | Enables Service Mesh creation | same doc |
-| **3.7** | **Build Service Mesh** | **HCX UI** | Ensure all services show *Healthy* | same doc |
-| **3.8** | *(Optional)* **Extend L2 Networks** to AVS | **HCX UI** | For live migration or DR validation | [Network Extension](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-hcx-network-extension) |
-| **3.9** | **Validate migrations** (Cold, vMotion, Bulk) | **HCX UI** | Confirm vCenter and replication visibility | [Migration Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-migrate) |
-| **3.10** | **(Optional)** If migrating from another AVS private cloud | **Azure Portal → Networking → Interconnect** | Use **AVS Interconnect (Gen 1)** to connect both clouds in same region | [Connect multiple AVS private clouds (Gen 1 Interconnect)](https://learn.microsoft.com/en-us/azure/azure-vmware/connect-multiple-private-clouds-same-region) |
+| **3.5** | **Create AVS Interconnect between both SDDCs (same region)** | **Azure Portal → Networking → Interconnect** | Establishes private routing between SDDCs required for HCX pairing | [Connect multiple AVS private clouds (Gen 1 Interconnect)](https://learn.microsoft.com/en-us/azure/azure-vmware/connect-multiple-private-clouds-same-region#add-connection-between-private-clouds) |
+| **📘 Prerequisite Note:** | If both SDDCs are in the same region and not connected via a shared ExpressRoute circuit or Global Reach, complete **Step 3.5 – AVS Interconnect** **before** pairing HCX sites. This ensures private connectivity for HCX Service Mesh. | — | — | — |
+| **3.6** | **Pair sites** – Source HCX Connector → Destination HCX Cloud Manager | **HCX UI** | Authenticate with `cloudadmin@vsphere.local` credentials | [Configure HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) |
+| **3.7** | **Create Network Profiles & Compute Profiles** | **HCX UI** | Enables Service Mesh creation | same doc |
+| **3.8** | **Build Service Mesh** | **HCX UI** | Ensure all services show *Healthy* | same doc |
+| **3.9** | *(Optional)* **Extend L2 Networks** to AVS | **HCX UI** | For live migration or DR validation | [Network Extension](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-hcx-network-extension) |
+| **3.10** | **Validate migrations** (Cold, vMotion, Bulk) | **HCX UI** | Confirm vCenter and replication visibility | [Migration Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-migrate) |
 
 ---
 
@@ -121,4 +119,4 @@
 
 **Prepared by:** _Microsoft Cloud Solution Architect_  
 **Environment:** Azure VMware Solution (Gen 1)  
-**Last Updated:** October 20, 2025
+**Last Updated:** October 21, 2025
