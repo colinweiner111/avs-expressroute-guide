@@ -5,7 +5,7 @@
 📘 **References:**  
 [Connect AVS Gen 1 to on-premises via ExpressRoute Global Reach](https://learn.microsoft.com/en-us/azure/azure-vmware/tutorial-expressroute-global-reach-private-cloud) | [Create an ExpressRoute circuit](https://learn.microsoft.com/en-us/azure/expressroute/expressroute-howto-circuit-portal-resource-manager) | [AVS Networking Concepts](https://learn.microsoft.com/en-us/azure/azure-vmware/concepts-networking)
 
-> 🧱 _This section applies to AVS Gen 1. For Gen 2, native connectivity replaces ExpressRoute Global Reach._
+> 🧱 _This section applies to AVS Gen 1. For Gen 2, on-premises connectivity uses standard ExpressRoute connection through the Virtual Network gateway, not Global Reach._
 
 > 💡 **Note:** If you already have an existing ExpressRoute circuit connected to another AVS private cloud, reuse that same circuit and simply create a new **Global Reach connection** from the new AVS private cloud’s ExpressRoute circuit to your existing customer-managed circuit. Each AVS private cloud has its own Microsoft-managed ExpressRoute circuit that must be linked individually.
 
@@ -39,7 +39,7 @@
 
 📘 **Reference:** [Configure an external identity source in AVS (Gen 1)](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter)
 
-> 🧱 _This section applies to AVS Gen 1. For Gen 2, refer to the updated “native DNS and identity” documentation._
+> 🧱 _This section applies to AVS Gen 1. For Gen 2, DNS is configured using native DNS forward lookup zones (public or private), and identity configuration follows a similar LDAPS/LDAP integration process._
 
 ### **Task Checklist**
 - [ ] Validate DNS resolution between AVS and your AD domain (e.g., `corp.contoso.com`)
@@ -67,7 +67,7 @@
 📘 **References:**  
 [Install VMware HCX in AVS (Gen 1)](https://learn.microsoft.com/en-us/azure/azure-vmware/install-vmware-hcx) | [Configure VMware HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) | [HCX Network Extension](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-hcx-network-extension)
 
-> 🧱 _This section applies to AVS Gen 1. For Gen 2, see the new HCX and networking integration model that uses native connectivity._
+> 🧱 _This section applies to AVS Gen 1. For Gen 2, HCX configuration follows the same process but uses native connectivity through Azure Virtual Network peering._
 
 ### **Task Checklist**
 - [ ] Enable HCX Cloud Manager  
@@ -91,7 +91,7 @@
 | **3.2** | **Copy HCX license key and cloud URL** | **Azure Portal → Manage → Add-ons → HCX** | Needed for HCX Connector activation | same doc |
 | **3.3** | **Deploy HCX Connector OVA** | **vSphere UI (source SDDC)** | Configure management and service networks | [Configure HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) |
 | **3.4** | **Activate HCX Connector** | **HCX UI** | Validate SSO and network connectivity | same doc |
-| **3.5** | **Create AVS Interconnect between both SDDCs (same region)** | **Azure Portal → Networking → Interconnect** | Establishes private routing between SDDCs required for HCX pairing | [Connect multiple AVS private clouds (Gen 1 Interconnect)](https://learn.microsoft.com/en-us/azure/azure-vmware/connect-multiple-private-clouds-same-region#add-connection-between-private-clouds) |
+| **3.5** | **Create AVS Interconnect between both SDDCs (same region)** | **Azure Portal → AVS → Connectivity → AVS Interconnect** | Establishes private routing between SDDCs in the same region for HCX pairing | [Connect multiple AVS private clouds (Gen 1 Interconnect)](https://learn.microsoft.com/en-us/azure/azure-vmware/connect-multiple-private-clouds-same-region#add-connection-between-private-clouds) |
 | **📘 Prerequisite Note:** | If both SDDCs are in the same region and not connected via a shared ExpressRoute circuit or Global Reach, complete **Step 3.5 – AVS Interconnect** **before** pairing HCX sites. This ensures private connectivity for HCX Service Mesh. | — | — | — |
 | **3.6** | **Pair sites** – Source HCX Connector → Destination HCX Cloud Manager | **HCX UI** | Authenticate with `cloudadmin@vsphere.local` credentials | [Configure HCX](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-vmware-hcx) |
 | **3.7** | **Create Network Profiles & Compute Profiles** | **HCX UI** | Enables Service Mesh creation | same doc |
@@ -120,3 +120,4 @@
 **Prepared by:** _Microsoft Cloud Solution Architect_  
 **Environment:** Azure VMware Solution (Gen 1)  
 **Last Updated:** October 21, 2025
+
