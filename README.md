@@ -210,6 +210,139 @@ Use **Run Command → AddIdentitySource** (AVS Gen 1) or manual vCenter configur
 
 ---
 
+## 🔧 Troubleshooting LDAPS Login Failures (After Run Command Succeeds)
+
+> **Scenario:** AVS Run Command → AddIdentitySource completed successfully, but users still cannot log in to vCenter with AD credentials.
+
+### **Phase 1: Verify LDAPS Configuration is Active**
+
+| Step | Action | Expected Result | If Failed |
+|------|--------|----------------|-----------|
+| **1** | Log in to vCenter as `cloudadmin@vsphere.local` | Successful login | Cannot proceed - verify break-glass access |
+| **2** | Navigate to **Administration → Single Sign-On → Configuration → Identity Sources** | Domain appears in list | Re-run AddIdentitySource command |
+| **3** | Note the **exact domain name** shown (including case) | Example: `corp.contoso.com` or `CORP.CONTOSO.COM` | This is critical for login format |
+| **4** | Click **+ Add** in **Global Permissions** → search for a known AD user or group | Returns AD search results | LDAPS bind issue - verify bind account password |
+
+✅ If Step 4 returns results, LDAPS is working correctly. Proceed to Phase 2.
+
+---
+
+### **Phase 2: Verify User Permissions**
+
+| Step | Action | Location | Notes |
+|------|--------|----------|-------|
+| **5** | Search for the user's AD group | **Administration → Access Control → Global Permissions** | Example: `Domain Admins` or security group |
+| **6** | Check if the group has assigned roles | **Global Permissions** list | Must have CloudAdmin or custom role assigned |
+| **7** | If no permissions exist, add them | Click **+ Add** → search for AD group → assign role | Most common cause of login failures |
+| **8** | Verify user is member of the AD group | Check in Active Directory | User must be in the group assigned permissions |
+
+---
+
+### **Phase 3: Test Login with Correct Format**
+
+| Login Format | Example | When to Use |
+|--------------|---------|-------------|
+| **DOMAIN\username** | `CORP\jsmith` | NetBIOS domain name (most common) |
+| **domain.fqdn\username** | `corp.contoso.com\jsmith` | Fully qualified domain name |
+| **username@domain.fqdn** | `jsmith@corp.contoso.com` | UPN format (if configured in AD) |
+
+> ⚠️ **Critical:** Domain name is **case-sensitive**. Use the exact case shown in **Identity Sources** (Step 3 above).
+
+**Test Procedure:**
+1. Log out of vCenter
+2. Try login using format: `DOMAIN\username` (replace DOMAIN with exact case from Identity Sources)
+3. If failed, try format: `domain.fqdn\username`
+4. If failed, try format: `username@domain.fqdn`
+
+---
+
+### **Phase 4: Validate Active Directory Account Status**
+
+| Check | How to Verify | Resolution |
+|-------|---------------|------------|
+| **Account enabled** | AD Users and Computers → user properties | Enable the account |
+| **Account not locked** | AD Users and Computers → Account tab | Unlock the account |
+| **Password not expired** | AD Users and Computers → Account tab | Reset password |
+| **"User must change password at next logon"** | AD Users and Computers → Account tab | Uncheck this option |
+| **User in correct OU** | Verify user is within the Base DN scope | Move user or adjust Base DN |
+
+---
+
+### **Phase 5: Test with Known Admin Account**
+
+**Purpose:** Isolate whether the issue is configuration-wide or user-specific.
+
+1. Identify a known working account (e.g., Domain Administrator)
+2. Ensure this account has vCenter permissions assigned (Step 6-7)
+3. Attempt login using exact format from Phase 3
+
+**Results:**
+- ✅ **Admin account works** → Original user needs permissions or has account issues
+- ❌ **Admin account fails** → Domain name case mismatch or configuration error
+
+---
+
+### **Phase 6: Advanced Diagnostics**
+
+#### **Check vCenter Identity Source Details**
+
+1. **Administration → Single Sign-On → Configuration → Identity Sources**
+2. Select the domain → click **Edit**
+3. Verify:
+
+| Field | What to Check |
+|-------|---------------|
+| **Primary URL** | Must match DC FQDN: `ldaps://dc01.corp.contoso.com:636` |
+| **Base DN** | Must match AD structure: `DC=corp,DC=contoso,DC=com` |
+| **Domain Name** | Exact case matches what users are typing |
+
+#### **Verify Certificate is Current**
+
+If DC certificate was recently renewed:
+1. Export **new certificate** from Domain Controller
+2. Upload to Azure Blob Storage with SAS URL
+3. Re-run **AddIdentitySource** command with updated certificate
+
+#### **Check AVS Run Command History**
+
+1. Azure Portal → AVS → **Run Command → Execution History**
+2. Find the **AddIdentitySource** execution
+3. Review **Input Parameters** to confirm:
+   - DomainName
+   - PrimaryURL
+   - BaseDN
+   - Username (bind account)
+
+---
+
+### **🎯 Common Resolution Checklist**
+
+| Issue | Symptoms | Fix |
+|-------|----------|-----|
+| **No permissions assigned** | All users fail to log in | Assign CloudAdmin role to AD group in Global Permissions |
+| **Domain case mismatch** | Login fails but search works | Use exact case from Identity Sources list |
+| **Wrong login format** | "Invalid credentials" error | Try all three formats from Phase 3 |
+| **Account locked in AD** | Specific user fails | Unlock account in Active Directory |
+| **User not in assigned group** | Specific user fails | Add user to AD group with vCenter permissions |
+| **Bind account password changed** | Search fails to return results | Update identity source with new password |
+| **Certificate expired/renewed** | Sudden failures after working | Update certificate in identity source |
+
+---
+
+### **✅ Success Criteria**
+
+After completing troubleshooting, verify:
+
+- [ ] Identity source appears in vCenter
+- [ ] AD user/group search returns results
+- [ ] At least one AD group has vCenter role assigned
+- [ ] Test user is member of assigned AD group
+- [ ] Test user account is enabled and not locked in AD
+- [ ] Domain name case matches exactly between vCenter and login
+- [ ] Successful login with AD credentials using correct format
+
+---
+
 ## �🚀 3. VMware HCX Deployment & Configuration
 
 📘 **References:**  
