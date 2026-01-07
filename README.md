@@ -60,7 +60,7 @@
 | Area | Test Command | Expected Result | If Failed |
 |------|-------------|----------------|-----------|
 | **DNS** | `nslookup dc01.corp.contoso.com` | Returns DC IP address | Configure DNS forwarders in AVS |
-| **DNS Reverse** | `nslookup <DC_IP>` | Returns DC FQDN | Configure reverse DNS zones |
+| **DNS Reverse** | `nslookup 10.0.1.10` (use actual DC IP) | Returns `dc01.corp.contoso.com` | Add PTR record in reverse lookup zone (e.g., 1.0.10.in-addr.arpa) |
 | **Connectivity** | `Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636` | `TcpTestSucceeded : True` | Check NSG, firewall, ExpressRoute routing |
 | **Certificate** | `openssl s_client -connect dc01.corp.contoso.com:636` | Displays cert chain, no errors | Install valid LDAPS cert on DC |
 | **TLS Version** | Check output from openssl command above | Shows `TLSv1.2` or `TLSv1.3` | Enable TLS 1.2+ on Domain Controllers |
@@ -117,7 +117,7 @@ Get-ADUser -Identity "svc-vcenter-ldap" | Select-Object Name,Enabled,PasswordNev
 | **2.1a** | **Test DNS from AVS** | Run Command → `Invoke-PreflightDnsTest` | Verify DC FQDN resolves correctly | See validation commands below |
 | **2.2** | **Create LDAPS service account** | Active Directory | See Service Account Requirements section above | — |
 | **2.3** | **Verify LDAPS certificate on DC** | Domain Controller | Cert must have Server Auth EKU, valid SAN, not expired | See certificate validation below |
-| **2.4** | **Export LDAPS certificate** from a domain controller and upload to Azure Blob Storage | **Azure Portal / Storage Account** | Export full chain as Base64 `.cer` | [Step 2 – Export certificate](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-2-export-the-domain-controller-certificate) |
+| **2.4** | **Export LDAPS certificate** from a domain controller and upload to Azure Blob Storage | **Azure Portal / Storage Account** | Export full chain as Base64 `.cer` - **See detailed export steps below** | [Step 2 – Export certificate](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-2-export-the-domain-controller-certificate) |
 | **2.5** | **Generate SAS URL for certificate** | Azure Storage Account | Use 24-48 hour expiration | See command syntax below |
 | **2.6** | **Add Identity Source** using *Run Command → AddIdentitySource* | **Azure Portal → AVS → Run Command** | See complete command example below | [Step 3 – AddIdentitySource](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-3-run-the-addidentitysource-command) |
 | **2.7** | **Verify identity source in vCenter** | **vCenter UI** | *Administration → SSO → Configuration → Identity Sources* | [Step 4 – Verify](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-4-verify-the-identity-source) |
@@ -127,37 +127,94 @@ Get-ADUser -Identity "svc-vcenter-ldap" | Select-Object Name,Enabled,PasswordNev
 
 ---
 
+### **📋 Certificate Chain Export (Step 2.4 Details)**
+
+**How to Export the Complete Certificate Chain:**
+
+1. **On Domain Controller:** Open `certlm.msc` (Local Computer certificates)
+2. Navigate to **Personal → Certificates**
+3. Locate the DC certificate (issued to the DC FQDN)
+4. Right-click → **All Tasks → Export**
+5. Click **Next** on the welcome screen
+6. Choose **"No, do not export the private key"**
+7. Select **"Base-64 encoded X.509 (.CER)"**
+8. ✅ **CRITICAL:** Check **"Include all certificates in the certification path if possible"**
+9. Save as `dc-ldaps-chain.cer`
+
+**Verify Chain Completeness:**
+
+```powershell
+# Verify the exported file contains multiple certificates
+Get-Content .\dc-ldaps-chain.cer | Select-String "BEGIN CERTIFICATE" | Measure-Object
+
+# Expected output: Count should be 2-3
+# - DC certificate
+# - Intermediate CA certificate(s)
+# - Root CA certificate
+```
+
+> ⚠️ **If Count = 1:** You only exported the DC cert, not the full chain. Re-export and ensure "Include all certificates in the certification path" is checked.
+
+**Upload to Azure Blob Storage:**
+
+```powershell
+# Upload the certificate chain to Azure Storage
+az storage blob upload \
+  --account-name "avscerts" \
+  --container-name "certificates" \
+  --name "dc-ldaps-chain.cer" \
+  --file "C:\Temp\dc-ldaps-chain.cer" \
+  --auth-mode login
+```
+
+---
+
 ### **📋 Complete Command Examples**
 
 #### **Step 2.5: Generate SAS URL for Certificate**
 
+**Option A: Using Azure PowerShell (Recommended)**
+
 ```powershell
-# Upload certificate to Azure Blob Storage
-$storageAccount = "yourstorageaccount"
-$containerName = "certs"
-$certFile = "C:\Temp\dc-ldaps-cert.cer"
-$blobName = "dc-ldaps-cert.cer"
+# Generate 48-hour SAS URL using Azure PowerShell
+$storageAccountName = "avscerts"
+$containerName = "certificates"
+$blobName = "dc-ldaps-chain.cer"
+$resourceGroup = "avs-rg"
 
-# Upload file
-az storage blob upload `
-  --account-name $storageAccount `
-  --container-name $containerName `
-  --name $blobName `
-  --file $certFile
+# Get storage account context
+$storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccountName
+$ctx = $storageAccount.Context
 
-# Generate SAS URL (valid for 24 hours)
-$sasToken = az storage blob generate-sas `
-  --account-name $storageAccount `
-  --container-name $containerName `
-  --name $blobName `
-  --permissions r `
-  --expiry (Get-Date).AddHours(24).ToString("yyyy-MM-ddTHH:mm:ssZ") `
-  --https-only `
-  --output tsv
+# Generate SAS token with 48-hour expiration
+$sasUrl = New-AzStorageBlobSASToken `
+  -Container $containerName `
+  -Blob $blobName `
+  -Permission r `
+  -ExpiryTime (Get-Date).AddHours(48) `
+  -Context $ctx `
+  -FullUri
 
-$sasUrl = "https://$storageAccount.blob.core.windows.net/$containerName/$blobName?$sasToken"
-Write-Host "SAS URL: $sasUrl"
+Write-Host "SAS URL (valid for 48 hours):"
+Write-Host $sasUrl
 ```
+
+**Option B: Using Azure CLI**
+
+```bash
+# Generate 48-hour SAS URL using Azure CLI
+az storage blob generate-sas \
+  --account-name "avscerts" \
+  --container-name "certificates" \
+  --name "dc-ldaps-chain.cer" \
+  --permissions r \
+  --expiry $(date -u -d '48 hours' '+%Y-%m-%dT%H:%MZ') \
+  --https-only \
+  --full-uri \
+  --output tsv
+```
+
+> 💡 **Tip:** Use 48-hour expiration to allow time for troubleshooting. The SAS URL is only used during the AddIdentitySource Run Command execution.
 
 #### **Step 2.6: Complete AddIdentitySource Command**
 
@@ -213,6 +270,11 @@ nslookup dc02.corp.contoso.com
 Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636
 
 # Expected output: TcpTestSucceeded : True
+
+# Verify routing to DC (diagnostic mode)
+Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636 -DiagnoseRouting
+
+# Shows hop-by-hop path to DC - useful for ExpressRoute troubleshooting
 ```
 
 #### **Validate LDAPS Certificate (Step 2.3)**
@@ -251,16 +313,20 @@ In vCenter UI:
 
 ### **🚨 Common Error Messages & Resolutions**
 
-| Error Message | Cause | Resolution |
-|---------------|-------|------------|
-| `"Cannot resolve host"` | DNS failure | Verify DNS forwarders in AVS pointing to AD DNS servers |
-| `"Connection timed out"` | Port 636 blocked | Check NSG, Azure Firewall, on-prem firewall rules |
-| `"Certificate verification failed"` | Cert issue | Ensure cert has Server Auth EKU, valid SAN, not expired |
-| `"Invalid credentials"` | Bind account password wrong | Verify service account password, check account not locked |
-| `"Unable to search"` | Base DN incorrect | Verify `DC=corp,DC=contoso,DC=com` matches AD structure |
-| `"SSL handshake failed"` | TLS version mismatch | Enable TLS 1.2+ on Domain Controllers |
-| `"Users not found"` | Wrong search base | Ensure users are within Base DN scope |
-| `"Run Command timed out"` | SAS URL expired/inaccessible | Regenerate SAS URL with longer expiration |
+| Error Message (Exact Text) | Cause | Resolution |
+|----------------------------|-------|------------|
+| `"Cannot resolve host"` or `"getaddrinfo failed"` | DNS failure | Verify DNS forwarders in AVS pointing to AD DNS servers |
+| `"Connection timed out"` or `"Connection refused"` | Port 636 blocked | Check NSG, Azure Firewall, on-prem firewall rules - verify `Test-NetConnection -Port 636` succeeds |
+| `"SSL certificate verify failed"` or `"unable to get local issuer certificate"` | Certificate chain incomplete or not trusted | Re-export with full chain (check step 2.4), verify root CA in vCenter trust store |
+| `"Can't contact LDAP server"` | Network/firewall blocking 636/tcp | Verify routing and firewall rules allow AVS → DC on port 636 |
+| `"Invalid credentials"` or `"Bind failed: Invalid credentials"` | Bind account password wrong or format incorrect | Verify service account can bind using `ldp.exe`, check account not locked |
+| `"Insufficient access rights"` or `"Access denied"` | Service account lacks read permissions | Grant Domain Users membership minimum, verify account is enabled |
+| `"Unable to search"` or `"No such object"` | Base DN incorrect | Verify `DC=corp,DC=contoso,DC=com` matches AD structure exactly |
+| `"SSL handshake failed"` or `"TLS handshake failed"` | TLS version mismatch (DC using TLS 1.0/1.1) | Enable TLS 1.2+ on Domain Controllers, disable older protocols |
+| `"Users not found"` or `"Search returned 0 results"` | Wrong search base or users outside Base DN scope | Ensure users are within Base DN, verify LDAP query with `ldp.exe` |
+| `"Run Command timed out"` or `"Failed to download certificate"` | SAS URL expired/inaccessible | Regenerate SAS URL with 48-hour expiration, verify blob is accessible |
+| `"Server time too different"` or `"Clock skew too great"` | Time difference >5 minutes between vCenter and DC | Sync DC and vCenter time with reliable NTP source |
+| `"Domain already exists"` | Identity source with same name already configured | Remove existing identity source first, or use unique name |
 
 ---
 
@@ -437,6 +503,8 @@ Use **Run Command → AddIdentitySource** (AVS Gen 1) or manual vCenter configur
 | **6** | Check if the group has assigned roles | **Global Permissions** list | Must have CloudAdmin or custom role assigned |
 | **7** | If no permissions exist, add them | Click **+ Add** → search for AD group → assign role | Most common cause of login failures |
 | **8** | Verify user is member of the AD group | Check in Active Directory | User must be in the group assigned permissions |
+
+> ⚠️ **Nested Groups Warning:** vCenter does **NOT** support nested AD groups. Users must be **direct members** of the groups assigned vCenter permissions. If using nested groups, flatten the structure or assign permissions to child groups directly.
 
 ---
 
