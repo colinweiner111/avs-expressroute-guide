@@ -43,22 +43,224 @@
 
 ### **Task Checklist**
 - [ ] Validate DNS resolution between AVS and your AD domain (e.g., `corp.contoso.com`)
+- [ ] Create and configure LDAPS service account with proper permissions
+- [ ] Verify LDAPS connectivity and certificate validity
 - [ ] Export LDAPS certificate from a domain controller (`.cer`) and upload to Azure Blob Storage
 - [ ] Add Identity Source using Run Command → AddIdentitySource
 - [ ] Verify identity source in vCenter
 - [ ] Assign roles to AD groups or users (CloudAdmin / custom roles)
 - [ ] Test login with `domain\user` credentials
 
+---
+
+### **🔍 Pre-Flight Troubleshooting & Validation**
+
+**Run these tests BEFORE attempting AddIdentitySource to avoid common failures:**
+
+| Area | Test Command | Expected Result | If Failed |
+|------|-------------|----------------|-----------|
+| **DNS** | `nslookup dc01.corp.contoso.com` | Returns DC IP address | Configure DNS forwarders in AVS |
+| **DNS Reverse** | `nslookup <DC_IP>` | Returns DC FQDN | Configure reverse DNS zones |
+| **Connectivity** | `Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636` | `TcpTestSucceeded : True` | Check NSG, firewall, ExpressRoute routing |
+| **Certificate** | `openssl s_client -connect dc01.corp.contoso.com:636` | Displays cert chain, no errors | Install valid LDAPS cert on DC |
+| **TLS Version** | Check output from openssl command above | Shows `TLSv1.2` or `TLSv1.3` | Enable TLS 1.2+ on Domain Controllers |
+| **Auth Test** | `ldp.exe` (Windows) - bind to `ldaps://dc01.corp.contoso.com:636` | Successful bind | Verify service account credentials |
+
+---
+
+### **🔑 Service Account Requirements**
+
+Create a dedicated service account for vCenter LDAPS binding:
+
+#### **Active Directory Configuration**
+
+```powershell
+# Create service account in AD (run on Domain Controller)
+New-ADUser -Name "svc-vcenter-ldap" `
+  -SamAccountName "svc-vcenter-ldap" `
+  -UserPrincipalName "svc-vcenter-ldap@corp.contoso.com" `
+  -Path "OU=ServiceAccounts,DC=corp,DC=contoso,DC=com" `
+  -AccountPassword (ConvertTo-SecureString "YourSecurePassword!" -AsPlainText -Force) `
+  -Enabled $true `
+  -PasswordNeverExpires $true `
+  -CannotChangePassword $true
+
+# Verify account was created
+Get-ADUser -Identity "svc-vcenter-ldap" | Select-Object Name,Enabled,PasswordNeverExpires
+```
+
+#### **Required Permissions**
+
+| Permission | Scope | Purpose |
+|------------|-------|---------|
+| **Read** | Base DN (e.g., `DC=corp,DC=contoso,DC=com`) | Search users and groups |
+| **Member of Domain Users** | Default group membership | Standard read access |
+
+> ✅ **No admin rights required** - service account only needs read access to AD  
+> ⚠️ **Do NOT** make this account a Domain Admin
+
+#### **Security Best Practices**
+
+- [ ] Use a dedicated service account (not a user account)
+- [ ] Set `PasswordNeverExpires = true` to avoid auth failures
+- [ ] Document password in secure vault (Azure Key Vault, password manager)
+- [ ] Restrict account to "Logon To" specific DCs only (optional)
+- [ ] Enable "Account is sensitive and cannot be delegated" (optional security hardening)
+
+---
+
 ### **Detailed Steps**
 
 | Step | Action | Location | Notes / Inputs | Reference |
 |------|--------|-----------|----------------|------------|
 | **2.1** | **Validate DNS resolution** between AVS and your AD domain | **Azure Portal** | Configure DNS forwarders so vCenter can resolve DCs | [Configure DNS forwarder for AVS (Gen 1)](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-dns-azure-vmware-solution) |
-| **2.2** | **Export LDAPS certificate** from a domain controller and upload to Azure Blob Storage | **Azure Portal / Storage Account** | Generate a SAS URL for the certificate | [Step 2 – Export certificate](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-2-export-the-domain-controller-certificate) |
-| **2.3** | **Add Identity Source** using *Run Command → AddIdentitySource* | **Azure Portal → AVS → Run Command** | Provide DomainName, BaseDN, PrimaryURL (ldaps://), SAS URL, Username, and Password | [Step 3 – AddIdentitySource](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-3-run-the-addidentitysource-command) |
-| **2.4** | **Verify identity source in vCenter** | **vCenter UI** | *Administration → SSO → Configuration → Identity Sources* | [Step 4 – Verify](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-4-verify-the-identity-source) |
-| **2.5** | **Assign roles** to AD groups or users** | **vCenter UI** | Use least privilege and governance best practices | [AVS Identity Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-identity) |
-| **2.6** | **Test login** with `domain\user` credentials | **vCenter UI** | Validate successful AD authentication | — |
+| **2.1a** | **Test DNS from AVS** | Run Command → `Invoke-PreflightDnsTest` | Verify DC FQDN resolves correctly | See validation commands below |
+| **2.2** | **Create LDAPS service account** | Active Directory | See Service Account Requirements section above | — |
+| **2.3** | **Verify LDAPS certificate on DC** | Domain Controller | Cert must have Server Auth EKU, valid SAN, not expired | See certificate validation below |
+| **2.4** | **Export LDAPS certificate** from a domain controller and upload to Azure Blob Storage | **Azure Portal / Storage Account** | Export full chain as Base64 `.cer` | [Step 2 – Export certificate](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-2-export-the-domain-controller-certificate) |
+| **2.5** | **Generate SAS URL for certificate** | Azure Storage Account | Use 24-48 hour expiration | See command syntax below |
+| **2.6** | **Add Identity Source** using *Run Command → AddIdentitySource* | **Azure Portal → AVS → Run Command** | See complete command example below | [Step 3 – AddIdentitySource](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-3-run-the-addidentitysource-command) |
+| **2.7** | **Verify identity source in vCenter** | **vCenter UI** | *Administration → SSO → Configuration → Identity Sources* | [Step 4 – Verify](https://learn.microsoft.com/en-us/azure/azure-vmware/configure-identity-source-vcenter#step-4-verify-the-identity-source) |
+| **2.8** | **Test AD search functionality** | **vCenter UI** | Administration → Access Control → Add → Search for AD user/group | Confirms LDAPS bind is working |
+| **2.9** | **Assign roles** to AD groups or users** | **vCenter UI** | Use least privilege and governance best practices | [AVS Identity Architecture](https://learn.microsoft.com/en-us/azure/azure-vmware/architecture-identity) |
+| **2.10** | **Test login** with `domain\user` credentials | **vCenter UI** | Validate successful AD authentication | — |
+
+---
+
+### **📋 Complete Command Examples**
+
+#### **Step 2.5: Generate SAS URL for Certificate**
+
+```powershell
+# Upload certificate to Azure Blob Storage
+$storageAccount = "yourstorageaccount"
+$containerName = "certs"
+$certFile = "C:\Temp\dc-ldaps-cert.cer"
+$blobName = "dc-ldaps-cert.cer"
+
+# Upload file
+az storage blob upload `
+  --account-name $storageAccount `
+  --container-name $containerName `
+  --name $blobName `
+  --file $certFile
+
+# Generate SAS URL (valid for 24 hours)
+$sasToken = az storage blob generate-sas `
+  --account-name $storageAccount `
+  --container-name $containerName `
+  --name $blobName `
+  --permissions r `
+  --expiry (Get-Date).AddHours(24).ToString("yyyy-MM-ddTHH:mm:ssZ") `
+  --https-only `
+  --output tsv
+
+$sasUrl = "https://$storageAccount.blob.core.windows.net/$containerName/$blobName?$sasToken"
+Write-Host "SAS URL: $sasUrl"
+```
+
+#### **Step 2.6: Complete AddIdentitySource Command**
+
+```powershell
+# AVS Run Command → AddIdentitySource
+# Replace values with your environment
+
+-Name "corp.contoso.com"
+-DomainName "corp.contoso.com"
+-DomainAlias "CORP"
+-PrimaryUrl "ldaps://dc01.corp.contoso.com:636"
+-SecondaryUrl "ldaps://dc02.corp.contoso.com:636"  # Optional but recommended
+-BaseDNUsers "DC=corp,DC=contoso,DC=com"
+-BaseDNGroups "DC=corp,DC=contoso,DC=com"
+-Credential (New-Object PSCredential("svc-vcenter-ldap", (ConvertTo-SecureString "YourServiceAccountPassword" -AsPlainText -Force)))
+-SSLCertificatesSasUrl "https://yourstorageaccount.blob.core.windows.net/certs/dc-ldaps-cert.cer?sv=2021..."
+-GroupName "vsphere-admins"  # Optional: AD group to auto-assign CloudAdmin role
+```
+
+**Parameter Breakdown:**
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `-Name` | `corp.contoso.com` | Display name for identity source |
+| `-DomainName` | `corp.contoso.com` | **Case-sensitive** - must match exactly |
+| `-DomainAlias` | `CORP` | NetBIOS name (for `CORP\username` login format) |
+| `-PrimaryUrl` | `ldaps://dc01.corp.contoso.com:636` | Primary DC FQDN with LDAPS port |
+| `-SecondaryUrl` | `ldaps://dc02.corp.contoso.com:636` | Optional secondary DC for redundancy |
+| `-BaseDNUsers` | `DC=corp,DC=contoso,DC=com` | Where to search for users |
+| `-BaseDNGroups` | `DC=corp,DC=contoso,DC=com` | Where to search for groups |
+| `-Credential` | Service account username & password | Use dedicated LDAPS service account |
+| `-SSLCertificatesSasUrl` | SAS URL from Step 2.5 | Must be accessible from AVS |
+| `-GroupName` | `vsphere-admins` | Optional: auto-assign CloudAdmin to this AD group |
+
+---
+
+### **✅ Validation Commands (After Each Step)**
+
+#### **Validate DNS Resolution (Step 2.1)**
+
+```powershell
+# From jump box or Azure VM with access to AVS
+nslookup dc01.corp.contoso.com
+nslookup dc02.corp.contoso.com
+
+# Expected output: Returns IP address(es)
+```
+
+#### **Validate LDAPS Connectivity (Step 2.3)**
+
+```powershell
+# Test LDAPS port connectivity
+Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636
+
+# Expected output: TcpTestSucceeded : True
+```
+
+#### **Validate LDAPS Certificate (Step 2.3)**
+
+```bash
+# Using OpenSSL (Git Bash, WSL, or Linux)
+openssl s_client -connect dc01.corp.contoso.com:636 -showcerts
+
+# Check for:
+# ✅ Certificate chain displayed
+# ✅ "Verification: OK" or similar
+# ✅ "subject=CN=dc01.corp.contoso.com" matches FQDN
+# ✅ "TLS handshake" completes
+# ❌ No "certificate verify failed" errors
+```
+
+#### **Validate Identity Source Added (Step 2.7)**
+
+```powershell
+# In vCenter PowerCLI
+Get-IdentitySource | Where-Object {$_.Name -eq "corp.contoso.com"}
+
+# Expected output: Returns identity source details
+```
+
+#### **Validate AD Search (Step 2.8)**
+
+In vCenter UI:
+1. **Administration → Access Control → Global Permissions**
+2. Click **+ Add**
+3. Search for a known AD user (e.g., `jsmith`)
+4. ✅ **Expected:** User appears in results
+5. ❌ **If no results:** LDAPS bind issue - check service account credentials
+
+---
+
+### **🚨 Common Error Messages & Resolutions**
+
+| Error Message | Cause | Resolution |
+|---------------|-------|------------|
+| `"Cannot resolve host"` | DNS failure | Verify DNS forwarders in AVS pointing to AD DNS servers |
+| `"Connection timed out"` | Port 636 blocked | Check NSG, Azure Firewall, on-prem firewall rules |
+| `"Certificate verification failed"` | Cert issue | Ensure cert has Server Auth EKU, valid SAN, not expired |
+| `"Invalid credentials"` | Bind account password wrong | Verify service account password, check account not locked |
+| `"Unable to search"` | Base DN incorrect | Verify `DC=corp,DC=contoso,DC=com` matches AD structure |
+| `"SSL handshake failed"` | TLS version mismatch | Enable TLS 1.2+ on Domain Controllers |
+| `"Users not found"` | Wrong search base | Ensure users are within Base DN scope |
+| `"Run Command timed out"` | SAS URL expired/inaccessible | Regenerate SAS URL with longer expiration |
 
 ---
 
