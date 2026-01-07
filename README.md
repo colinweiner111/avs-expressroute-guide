@@ -218,8 +218,10 @@ az storage blob generate-sas \
 
 #### **Step 2.6: Complete AddIdentitySource Command**
 
+> 🧱 **This example is for AVS Gen 1**. For Gen 2, some parameters may differ - see Gen 2 documentation.
+
 ```powershell
-# AVS Run Command → AddIdentitySource
+# AVS Gen 1 - Azure Portal → Run Command → AddIdentitySource
 # Replace values with your environment
 
 -Name "corp.contoso.com"
@@ -227,12 +229,17 @@ az storage blob generate-sas \
 -DomainAlias "CORP"
 -PrimaryUrl "ldaps://dc01.corp.contoso.com:636"
 -SecondaryUrl "ldaps://dc02.corp.contoso.com:636"  # Optional but recommended
--BaseDNUsers "DC=corp,DC=contoso,DC=com"
--BaseDNGroups "DC=corp,DC=contoso,DC=com"
--Credential (New-Object PSCredential("svc-vcenter-ldap", (ConvertTo-SecureString "YourServiceAccountPassword" -AsPlainText -Force)))
--SSLCertificatesSasUrl "https://yourstorageaccount.blob.core.windows.net/certs/dc-ldaps-cert.cer?sv=2021..."
+-BaseDNUsers "DC=corp,DC=contoso,DC=com"  # Gen 1: applies to both users AND groups
+-Username "svc-vcenter-ldap@corp.contoso.com"  # Service account UPN or DOMAIN\username
+-Password "YourServiceAccountPassword"  # Service account password
+-SSLCertificatesSasUrl "https://yourstorageaccount.blob.core.windows.net/certs/dc-ldaps-chain.cer?sv=2021..."
 -GroupName "vsphere-admins"  # Optional: AD group to auto-assign CloudAdmin role
 ```
+
+> ⚠️ **Important:** 
+> - **Gen 1:** Use `-Username` and `-Password` as separate string parameters (shown above)
+> - **Gen 2 / PowerCLI:** May use `-Credential` PSCredential object instead
+> - `-BaseDNGroups` parameter does **NOT exist in Gen 1** - use only `-BaseDNUsers` which applies to both
 
 **Parameter Breakdown:**
 
@@ -243,10 +250,10 @@ az storage blob generate-sas \
 | `-DomainAlias` | `CORP` | NetBIOS name (for `CORP\username` login format) |
 | `-PrimaryUrl` | `ldaps://dc01.corp.contoso.com:636` | Primary DC FQDN with LDAPS port |
 | `-SecondaryUrl` | `ldaps://dc02.corp.contoso.com:636` | Optional secondary DC for redundancy |
-| `-BaseDNUsers` | `DC=corp,DC=contoso,DC=com` | Where to search for users |
-| `-BaseDNGroups` | `DC=corp,DC=contoso,DC=com` | Where to search for groups |
-| `-Credential` | Service account username & password | Use dedicated LDAPS service account |
-| `-SSLCertificatesSasUrl` | SAS URL from Step 2.5 | Must be accessible from AVS |
+| `-BaseDNUsers` | `DC=corp,DC=contoso,DC=com` | **Gen 1:** Applies to both users AND groups search |
+| `-Username` | `svc-vcenter-ldap@corp.contoso.com` | Service account UPN (or `DOMAIN\username`) |
+| `-Password` | Service account password | Plain text password (only used during Run Command) |
+| `-SSLCertificatesSasUrl` | SAS URL from Step 2.5 | Must be accessible from AVS, include full cert chain |
 | `-GroupName` | `vsphere-admins` | Optional: auto-assign CloudAdmin to this AD group |
 
 ---
@@ -283,12 +290,47 @@ Test-NetConnection -ComputerName dc01.corp.contoso.com -Port 636 -DiagnoseRoutin
 # Using OpenSSL (Git Bash, WSL, or Linux)
 openssl s_client -connect dc01.corp.contoso.com:636 -showcerts
 
+# Example successful output:
+# ---
+# Certificate chain
+#  0 s:CN=dc01.corp.contoso.com
+#    i:CN=Contoso Issuing CA
+#  1 s:CN=Contoso Issuing CA
+#    i:CN=Contoso Root CA
+# ---
+# SSL-Session:
+#     Protocol  : TLSv1.2
+# Verify return code: 0 (ok)
+
 # Check for:
-# ✅ Certificate chain displayed
-# ✅ "Verification: OK" or similar
+# ✅ Certificate chain displayed (2-3 certificates)
+# ✅ "Verify return code: 0 (ok)"
 # ✅ "subject=CN=dc01.corp.contoso.com" matches FQDN
-# ✅ "TLS handshake" completes
+# ✅ Protocol shows TLSv1.2 or TLSv1.3
 # ❌ No "certificate verify failed" errors
+```
+
+#### **Validate Service Account Can Bind (Step 2.2)**
+
+```powershell
+# Test service account LDAPS bind using ldp.exe (Windows)
+# 1. Open ldp.exe (comes with Windows RSAT tools)
+# 2. Connection → Connect
+#    - Server: dc01.corp.contoso.com
+#    - Port: 636
+#    - Check "SSL" checkbox
+#    - Click OK
+# 3. Connection → Bind
+#    - Bind type: Simple bind
+#    - User: svc-vcenter-ldap@corp.contoso.com
+#    - Password: (service account password)
+#    - Click OK
+
+# Expected output in ldp.exe log window:
+# "Authenticated as dn:'CN=svc-vcenter-ldap,OU=ServiceAccounts,DC=corp,DC=contoso,DC=com'"
+
+# ✅ If bind succeeds: Service account credentials are valid
+# ❌ If bind fails: Check password, account lock status, or permissions
 ```
 
 #### **Validate Identity Source Added (Step 2.7)**
@@ -316,7 +358,7 @@ In vCenter UI:
 | Error Message (Exact Text) | Cause | Resolution |
 |----------------------------|-------|------------|
 | `"Cannot resolve host"` or `"getaddrinfo failed"` | DNS failure | Verify DNS forwarders in AVS pointing to AD DNS servers |
-| `"Connection timed out"` or `"Connection refused"` | Port 636 blocked | Check NSG, Azure Firewall, on-prem firewall rules - verify `Test-NetConnection -Port 636` succeeds |
+| `"Connection timed out"` or `"Connection refused"` | Port 636 blocked | **If DCs in Azure:** Check NSG on DC subnet allows 636/tcp inbound<br>**If DCs on-prem:** Verify firewall allows 636/tcp from AVS via ExpressRoute<br>Run `Test-NetConnection -Port 636` to diagnose |
 | `"SSL certificate verify failed"` or `"unable to get local issuer certificate"` | Certificate chain incomplete or not trusted | Re-export with full chain (check step 2.4), verify root CA in vCenter trust store |
 | `"Can't contact LDAP server"` | Network/firewall blocking 636/tcp | Verify routing and firewall rules allow AVS → DC on port 636 |
 | `"Invalid credentials"` or `"Bind failed: Invalid credentials"` | Bind account password wrong or format incorrect | Verify service account can bind using `ldp.exe`, check account not locked |
